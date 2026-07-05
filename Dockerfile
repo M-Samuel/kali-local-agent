@@ -11,7 +11,8 @@ FROM node:20-bookworm-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     HOST=0.0.0.0 \
-    PORT=3000
+  PORT=3000 \
+  PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
@@ -21,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     netcat-openbsd \
     openssl \
+    chromium \
     tini \
   && rm -rf /var/lib/apt/lists/*
 

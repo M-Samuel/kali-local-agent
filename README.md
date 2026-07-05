@@ -3,7 +3,7 @@
 This project builds a hardened Docker image containing:
 
 - A Node.js MCP server (Streamable HTTP transport)
-- A selected security toolset (`nmap`, `sqlmap`, `dig`, `whois`, `openssl`, `curl`, `netcat`, `dnsutils`)
+- A selected security toolset (`nmap`, `sqlmap`, `dig`, `whois`, `openssl`, `curl`, `netcat`, `dnsutils`, plus Chromium for browser exploration)
 
 ## Installation & Setup
 
@@ -106,6 +106,8 @@ Use this in an MCP-compatible client that supports Streamable HTTP servers:
 ### Web & TLS Analysis
 
 - **`http_headers_check`**: Fetch HTTP response headers from a URL (supports redirect following and insecure TLS)
+- **`website_explore`**: Open a website in Playwright and return a structured summary of the page
+- **`website_interact_form`**: Fill form fields in Playwright and optionally submit the form
 - **`tls_certificate_check`**: Inspect TLS certificate and handshake details for a host
 - **`nmap_ssl_cipher_scan`**: Enumerate supported TLS ciphers on a target
 

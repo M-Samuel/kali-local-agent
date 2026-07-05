@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { access } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { chromium } from "playwright-core";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
@@ -12,6 +14,17 @@ const TOOL_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_CHARS = 12_000;
 const HOST = process.env.HOST ?? "0.0.0.0";
 const PORT = Number(process.env.PORT ?? "3000");
+const COMMON_CHROMIUM_PATHS = process.platform === "darwin"
+  ? [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    ]
+  : [
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable"
+    ];
 
 function clampOutput(text = "") {
   if (text.length <= MAX_OUTPUT_CHARS) {
@@ -45,6 +58,55 @@ async function runCommand(command, args, { timeoutMs = TOOL_TIMEOUT_MS } = {}) {
 
     return clampOutput(merged || `Failed to run ${command}.`);
   }
+}
+
+async function fileExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveChromiumExecutablePath() {
+  const envPath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+
+  if (envPath && await fileExists(envPath)) {
+    return envPath;
+  }
+
+  for (const candidate of COMMON_CHROMIUM_PATHS) {
+    if (await fileExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function truncateText(text, maxLength) {
+  const normalized = text.trim().replace(/\s+/g, " ");
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
+async function launchChromium() {
+  const executablePath = await resolveChromiumExecutablePath();
+
+  if (!executablePath) {
+    return null;
+  }
+
+  return chromium.launch({
+    headless: true,
+    executablePath,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"]
+  });
 }
 
 function createServer() {
@@ -178,6 +240,196 @@ function createServer() {
       return {
         content: [{ type: "text", text: output }]
       };
+    }
+  );
+
+  server.tool(
+    "website_explore",
+    "Open a website in Playwright and return a structured page summary.",
+    {
+      url: z.string().url(),
+      waitMs: z.number().int().min(0).max(10_000).optional(),
+      maxLinks: z.number().int().min(1).max(50).optional(),
+      maxTextChars: z.number().int().min(100).max(10_000).optional()
+    },
+    async ({ url, waitMs = 1_000, maxLinks = 10, maxTextChars = 2_000 }) => {
+      const browser = await launchChromium();
+
+      if (!browser) {
+        return {
+          content: [{
+            type: "text",
+            text: "No Chromium executable was found. Set PLAYWRIGHT_CHROMIUM_PATH or install Chromium/Google Chrome."
+          }]
+        };
+      }
+
+      try {
+        const page = await browser.newPage({
+          viewport: { width: 1440, height: 1600 }
+        });
+
+        const response = await page.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: 45_000
+        });
+
+        if (waitMs > 0) {
+          await page.waitForTimeout(waitMs);
+        }
+
+        const [title, description, headings, links, bodyText] = await Promise.all([
+          page.title(),
+          page.locator('meta[name="description"]').getAttribute("content").catch(() => null),
+          page.locator("h1, h2, h3").evaluateAll((elements) =>
+            elements
+              .map((element) => element.textContent?.trim())
+              .filter(Boolean)
+              .slice(0, 20)
+          ),
+          page.locator("a[href]").evaluateAll((elements) =>
+            elements
+              .map((element) => ({
+                text: element.textContent?.trim() || "",
+                href: element.getAttribute("href") || ""
+              }))
+              .filter((link) => link.href)
+              .slice(0, maxLinks)
+          ),
+          page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")
+        ]);
+
+        const result = {
+          url: page.url(),
+          status: response?.status() ?? null,
+          title,
+          description,
+          headings,
+          links,
+          text: truncateText(bodyText, maxTextChars)
+        };
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: clampOutput(error?.message?.trim() || "Failed to explore the website.")
+          }]
+        };
+      } finally {
+        await browser.close().catch(() => undefined);
+      }
+    }
+  );
+
+  server.tool(
+    "website_interact_form",
+    "Open a website in Playwright, fill form fields, and optionally submit the form.",
+    {
+      url: z.string().url(),
+      fields: z.array(z.object({
+        selector: z.string().min(1),
+        value: z.string().min(0),
+        type: z.enum(["text", "checkbox", "radio", "select"]).optional()
+      })).min(1).max(20),
+      submitSelector: z.string().min(1).optional(),
+      waitMs: z.number().int().min(0).max(10_000).optional(),
+      maxTextChars: z.number().int().min(100).max(10_000).optional()
+    },
+    async ({ url, fields, submitSelector, waitMs = 1_000, maxTextChars = 2_000 }) => {
+      const browser = await launchChromium();
+
+      if (!browser) {
+        return {
+          content: [{
+            type: "text",
+            text: "No Chromium executable was found. Set PLAYWRIGHT_CHROMIUM_PATH or install Chromium/Google Chrome."
+          }]
+        };
+      }
+
+      try {
+        const page = await browser.newPage({
+          viewport: { width: 1440, height: 1600 }
+        });
+
+        const response = await page.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: 45_000
+        });
+
+        for (const field of fields) {
+          const locator = page.locator(field.selector).first();
+          const fieldType = field.type ?? "text";
+
+          if (fieldType === "checkbox") {
+            const shouldCheck = ["true", "1", "yes", "on"].includes(field.value.toLowerCase());
+            if (shouldCheck) {
+              await locator.check({ timeout: 10_000 });
+            } else {
+              await locator.uncheck({ timeout: 10_000 });
+            }
+            continue;
+          }
+
+          if (fieldType === "radio") {
+            await locator.check({ timeout: 10_000 });
+            continue;
+          }
+
+          if (fieldType === "select") {
+            await locator.selectOption({ label: field.value }).catch(async () => {
+              await locator.selectOption({ value: field.value });
+            });
+            continue;
+          }
+
+          await locator.fill(field.value, { timeout: 10_000 });
+        }
+
+        if (submitSelector) {
+          await page.locator(submitSelector).first().click({ timeout: 10_000 });
+          await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
+        }
+
+        if (waitMs > 0) {
+          await page.waitForTimeout(waitMs);
+        }
+
+        const [title, bodyText] = await Promise.all([
+          page.title(),
+          page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")
+        ]);
+
+        const result = {
+          url: page.url(),
+          status: response?.status() ?? null,
+          title,
+          text: truncateText(bodyText, maxTextChars)
+        };
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: clampOutput(error?.message?.trim() || "Failed to interact with the form.")
+          }]
+        };
+      } finally {
+        await browser.close().catch(() => undefined);
+      }
     }
   );
 
