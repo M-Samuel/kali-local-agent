@@ -1,9 +1,9 @@
 # Kali Tools MCP Server (Docker)
 
-This project builds a Docker image containing:
+This project builds a hardened Docker image containing:
 
 - A Node.js MCP server (Streamable HTTP transport)
-- A selected Kali Linux toolset (`nmap`, `sqlmap`, `dig`, `whois`, `openssl`, `curl`, `netcat`, `dnsutils`)
+- A selected security toolset (`nmap`, `sqlmap`, `dig`, `whois`, `openssl`, `curl`, `netcat`, `dnsutils`)
 
 ## Installation & Setup
 
@@ -45,6 +45,21 @@ HOST=127.0.0.1 PORT=8080 npm start
 docker run -d --name kali-tools-mcp --rm -p 3000:3000 kali-tools-mcp:latest
 ```
 
+### Option 3: Docker (hardened runtime)
+
+```bash
+docker run -d --name kali-tools-mcp --rm \
+  -p 3000:3000 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --pids-limit 256 \
+  --memory 512m \
+  --cpus 1.0 \
+  kali-tools-mcp:latest
+```
+
 ### Health check
 
 ```bash
@@ -84,7 +99,7 @@ Use this in an MCP-compatible client that supports Streamable HTTP servers:
 
 ### Reconnaissance & Discovery
 
-- **`nmap_scan`**: Run `nmap` with a controlled set of options (`-sV`, `-sS`, `-Pn`, `-A`, `-F`)
+- **`nmap_scan`**: Run `nmap` with a controlled set of options (`-sV`, `-sT`, `-Pn`, `-A`, `-F`)
 - **`dig_lookup`**: Resolve DNS records via `dig` (A, AAAA, CNAME, MX, TXT, NS)
 - **`whois_lookup`**: Fetch WHOIS information for a domain
 
@@ -110,6 +125,7 @@ Use this in an MCP-compatible client that supports Streamable HTTP servers:
 
 ⚠️ **Important**: Run scans only on systems you own or have explicit written permission to test.
 
+- The image uses a slim base and runs as a non-root user.
 - The server limits command arguments and output size to reduce abuse and accidental overload.
 - All tool executions are bounded by timeouts and resource constraints.
 - Environment variables default to listening on all interfaces (`0.0.0.0`); restrict to `127.0.0.1` for local-only access.

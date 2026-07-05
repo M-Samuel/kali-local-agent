@@ -58,7 +58,7 @@ function createServer() {
     "Run nmap against a host or CIDR range.",
     {
       target: z.string().min(1),
-      options: z.array(z.enum(["-sV", "-sS", "-Pn", "-A", "-F"]))
+      options: z.array(z.enum(["-sV", "-sT", "-Pn", "-A", "-F"]))
         .max(4)
         .optional()
     },
