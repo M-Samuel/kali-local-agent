@@ -5,15 +5,25 @@ import { promisify } from "node:util";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { chromium } from "playwright-core";
+import { chromium } from "playwright";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 
 const TOOL_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_CHARS = 12_000;
+const PLAYWRIGHT_CLI_DEFAULT_TIMEOUT_MS = 90_000;
 const HOST = process.env.HOST ?? "0.0.0.0";
 const PORT = Number(process.env.PORT ?? "3000");
+const PLAYWRIGHT_CLI_ALLOWED_COMMANDS = new Set([
+  "--help",
+  "-h",
+  "--version",
+  "install",
+  "screenshot",
+  "pdf",
+  "show-trace"
+]);
 const COMMON_CHROMIUM_PATHS = process.platform === "darwin"
   ? [
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -107,6 +117,34 @@ async function launchChromium() {
     executablePath,
     args: ["--no-sandbox", "--disable-dev-shm-usage"]
   });
+}
+
+function validatePlaywrightCliArgs(args) {
+  const firstArg = args[0] ?? "--help";
+
+  if (!PLAYWRIGHT_CLI_ALLOWED_COMMANDS.has(firstArg)) {
+    return `Unsupported Playwright CLI command: ${firstArg}. Allowed: ${Array.from(PLAYWRIGHT_CLI_ALLOWED_COMMANDS).join(", ")}`;
+  }
+
+  if (firstArg === "install") {
+    const installArgs = args.slice(1);
+    const allowedInstallArgs = new Set([
+      "chromium",
+      "firefox",
+      "webkit",
+      "--help",
+      "--with-deps",
+      "--dry-run"
+    ]);
+
+    for (const installArg of installArgs) {
+      if (!allowedInstallArgs.has(installArg)) {
+        return `Unsupported playwright install arg: ${installArg}`;
+      }
+    }
+  }
+
+  return null;
 }
 
 function createServer() {
@@ -363,38 +401,68 @@ function createServer() {
           waitUntil: "domcontentloaded",
           timeout: 45_000
         });
+        let statusCode = response?.status() ?? null;
 
         for (const field of fields) {
           const locator = page.locator(field.selector).first();
           const fieldType = field.type ?? "text";
 
-          if (fieldType === "checkbox") {
-            const shouldCheck = ["true", "1", "yes", "on"].includes(field.value.toLowerCase());
-            if (shouldCheck) {
-              await locator.check({ timeout: 10_000 });
-            } else {
-              await locator.uncheck({ timeout: 10_000 });
+          try {
+            if (fieldType === "checkbox") {
+              const shouldCheck = ["true", "1", "yes", "on"].includes(field.value.toLowerCase());
+              if (shouldCheck) {
+                await locator.check({ timeout: 10_000 });
+              } else {
+                await locator.uncheck({ timeout: 10_000 });
+              }
+              continue;
             }
-            continue;
-          }
 
-          if (fieldType === "radio") {
-            await locator.check({ timeout: 10_000 });
-            continue;
-          }
+            if (fieldType === "radio") {
+              const radioLocator = field.value
+                ? page.locator(`${field.selector}[value=${JSON.stringify(field.value)}]`).first()
+                : locator;
+              await radioLocator.check({ timeout: 10_000 });
+              continue;
+            }
 
-          if (fieldType === "select") {
-            await locator.selectOption({ label: field.value }).catch(async () => {
-              await locator.selectOption({ value: field.value });
-            });
-            continue;
-          }
+            if (fieldType === "select") {
+              let selected = await locator.selectOption({ label: field.value }).catch(() => []);
 
-          await locator.fill(field.value, { timeout: 10_000 });
+              if (!selected.length) {
+                selected = await locator.selectOption({ value: field.value }).catch(() => []);
+              }
+
+              if (!selected.length && /^\d+$/.test(field.value)) {
+                selected = await locator.selectOption({ index: Number(field.value) }).catch(() => []);
+              }
+
+              if (!selected.length) {
+                throw new Error("No matching select option found by label, value, or index.");
+              }
+              continue;
+            }
+
+            await locator.fill(field.value, { timeout: 10_000 });
+          } catch (error) {
+            throw new Error(
+              `Field action failed for selector "${field.selector}" (type: ${fieldType}): ${error?.message || "unknown error"}`
+            );
+          }
         }
 
         if (submitSelector) {
+          const navigationResponsePromise = page
+            .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 })
+            .catch(() => null);
+
           await page.locator(submitSelector).first().click({ timeout: 10_000 });
+          const navigationResponse = await navigationResponsePromise;
+
+          if (navigationResponse) {
+            statusCode = navigationResponse.status();
+          }
+
           await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
         }
 
@@ -409,7 +477,7 @@ function createServer() {
 
         const result = {
           url: page.url(),
-          status: response?.status() ?? null,
+          status: statusCode,
           title,
           text: truncateText(bodyText, maxTextChars)
         };
@@ -430,6 +498,29 @@ function createServer() {
       } finally {
         await browser.close().catch(() => undefined);
       }
+    }
+  );
+
+  server.tool(
+    "playwright_cli",
+    "Run bounded Playwright CLI commands from the MCP server.",
+    {
+      args: z.array(z.string().min(1)).max(20).optional(),
+      timeoutMs: z.number().int().min(1_000).max(180_000).optional()
+    },
+    async ({ args = ["--version"], timeoutMs = PLAYWRIGHT_CLI_DEFAULT_TIMEOUT_MS }) => {
+      const validationError = validatePlaywrightCliArgs(args);
+
+      if (validationError) {
+        return {
+          content: [{ type: "text", text: validationError }]
+        };
+      }
+
+      const output = await runCommand("playwright", args, { timeoutMs });
+      return {
+        content: [{ type: "text", text: output }]
+      };
     }
   );
 

@@ -1,6 +1,7 @@
 FROM node:20-bookworm-slim AS deps
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -12,7 +13,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     HOST=0.0.0.0 \
   PORT=3000 \
-  PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium
+  PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium \
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
@@ -34,6 +36,7 @@ COPY src ./src
 
 # Run as an unprivileged user by default.
 RUN groupadd --system --gid 10001 appgroup \
+  && ln -sf /app/node_modules/.bin/playwright /usr/local/bin/playwright \
   && useradd --system --uid 10001 --gid appgroup --home-dir /app --shell /usr/sbin/nologin appuser \
   && chown -R appuser:appgroup /app
 

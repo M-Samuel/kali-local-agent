@@ -108,6 +108,7 @@ Use this in an MCP-compatible client that supports Streamable HTTP servers:
 - **`http_headers_check`**: Fetch HTTP response headers from a URL (supports redirect following and insecure TLS)
 - **`website_explore`**: Open a website in Playwright and return a structured summary of the page
 - **`website_interact_form`**: Fill form fields in Playwright and optionally submit the form
+- **`playwright_cli`**: Run bounded Playwright CLI commands (`--version`, `install`, `screenshot`, `pdf`, `show-trace`)
 - **`tls_certificate_check`**: Inspect TLS certificate and handshake details for a host
 - **`nmap_ssl_cipher_scan`**: Enumerate supported TLS ciphers on a target
 
