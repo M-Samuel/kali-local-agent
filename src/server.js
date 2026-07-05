@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -108,15 +109,46 @@ function truncateText(text, maxLength) {
 async function launchChromium() {
   const executablePath = await resolveChromiumExecutablePath();
 
-  if (!executablePath) {
-    return null;
+  const runtimeDirs = [
+    "/tmp/.chromium-config",
+    "/tmp/.chromium-cache",
+    "/tmp/.chromium-runtime"
+  ];
+
+  for (const dir of runtimeDirs) {
+    await mkdir(dir, { recursive: true }).catch(() => undefined);
   }
 
-  return chromium.launch({
+  const launchOptions = {
     headless: true,
-    executablePath,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"]
-  });
+    env: {
+      ...process.env,
+      HOME: "/tmp",
+      XDG_CONFIG_HOME: "/tmp/.chromium-config",
+      XDG_CACHE_HOME: "/tmp/.chromium-cache",
+      XDG_RUNTIME_DIR: "/tmp/.chromium-runtime"
+    },
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-crash-reporter",
+      "--disable-crashpad"
+    ]
+  };
+
+  try {
+    // Prefer Playwright-managed Chromium for maximum runtime compatibility.
+    return await chromium.launch(launchOptions);
+  } catch {
+    if (!executablePath) {
+      return null;
+    }
+
+    return chromium.launch({
+      ...launchOptions,
+      executablePath
+    });
+  }
 }
 
 function validatePlaywrightCliArgs(args) {

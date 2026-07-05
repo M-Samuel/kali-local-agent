@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim AS deps
 
 ENV NODE_ENV=production \
-  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+  PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -11,10 +11,13 @@ FROM node:20-bookworm-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
+  PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright \
+  HOME=/tmp \
+  XDG_CONFIG_HOME=/tmp/.chromium-config \
+  XDG_CACHE_HOME=/tmp/.chromium-cache \
+  XDG_RUNTIME_DIR=/tmp/.chromium-runtime \
     HOST=0.0.0.0 \
-  PORT=3000 \
-  PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium \
-  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+  PORT=3000
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
@@ -24,7 +27,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     netcat-openbsd \
     openssl \
-    chromium \
     tini \
   && rm -rf /var/lib/apt/lists/*
 
@@ -33,6 +35,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./package.json
 COPY src ./src
+
+RUN npx playwright install --with-deps chromium
 
 # Run as an unprivileged user by default.
 RUN groupadd --system --gid 10001 appgroup \
