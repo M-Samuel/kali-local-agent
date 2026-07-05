@@ -357,14 +357,15 @@ function createServer() {
               .filter(Boolean)
               .slice(0, 20)
           ),
-          page.locator("a[href]").evaluateAll((elements) =>
+          page.locator("a[href]").evaluateAll((elements, limit) =>
             elements
               .map((element) => ({
                 text: element.textContent?.trim() || "",
                 href: element.getAttribute("href") || ""
               }))
               .filter((link) => link.href)
-              .slice(0, maxLinks)
+              .slice(0, limit),
+            maxLinks
           ),
           page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")
         ]);
